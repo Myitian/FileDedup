@@ -1,4 +1,5 @@
-﻿using System.Text;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace FileDedup;
 
@@ -13,4 +14,6 @@ static class Extension
         string text = number.ToString();
         return sb.Append(' ', Math.Max(width - text.Length, 0)).Append(text);
     }
+    public static Span<byte> AsBytes(this ref FileHash hash)
+        => MemoryMarshal.AsBytes<int>(hash);
 }
