@@ -4,6 +4,8 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+
 namespace FileDedup;
 
 class Program
@@ -15,6 +17,7 @@ class Program
     const string argMinSize = "--min-size";
     const string argDryRun = "--dry-run";
     const string argDupOnly = "--dup-only";
+    const string argFollowSymbolLinks = "--follow-symlink";
     const RegexOptions regexOptions = RegexOptions.ExplicitCapture | RegexOptions.Compiled | RegexOptions.Singleline | RegexOptions.CultureInvariant;
     static int Main(string[] args)
     {
@@ -49,6 +52,11 @@ class Program
             {
                 Default = "true",
                 Info = "boolean: Whether should show duplicated only"
+            },
+            new(argFollowSymbolLinks, 1)
+            {
+                Default = "true",
+                Info = "boolean: Whether should follow symlink target"
             });
         if (argx.Results.ContainsKey(argHelp) || argx.UnknownArgs.Count == 0)
         {
@@ -95,13 +103,31 @@ class Program
             Console.Error.WriteLine($"{argDupOnly}: Invalid argument value");
             return 1;
         }
+        if (!argx.TryGetBoolean(argFollowSymbolLinks, out bool followSymLinks))
+        {
+            Console.Error.WriteLine($"{argFollowSymbolLinks}: Invalid argument value");
+            return 1;
+        }
+        bool exiting = false;
+        Console.CancelKeyPress += (s, e) =>
+        {
+            if (!exiting)
+            {
+                Console.Error.WriteLine("Canceling...");
+                exiting = true;
+                e.Cancel = true;
+            }
+        };
+        HashSet<FileID> visited = [];
         Dictionary<long, string?> fastLookup = [];
         Dictionary<FileHash, string> fileMappings = [];
         foreach (FileInfo fi in EnumerateFiles(argx.UnknownArgs
             .SelectMany<string, FileSystemInfo>(it => File.Exists(it) ? [new FileInfo(it)]
                                                     : Directory.Exists(it) ? [new DirectoryInfo(it)]
-                                                    : [])))
+                                                    : []), followSymLinks))
         {
+            if (exiting)
+                break;
             string currentFileName = fi.FullName;
             if (restore is not null)
             {
@@ -110,6 +136,8 @@ class Program
                 else
                     restore = null;
             }
+            if (!AddVisited(visited, currentFileName)) // Skip files associated with visited hard links
+                continue;
             long length = fi.Length;
             if (length < minSize)
                 continue;
@@ -164,7 +192,17 @@ class Program
         }
         return 0;
     }
-
+    private static bool AddVisited(HashSet<FileID> visited, string file)
+    {
+        try
+        {
+            FileID id = FileID.GetFromFile(file);
+            if (!(id.IsInvalid || visited.Add(id)))
+                return false;
+        }
+        catch { }
+        return true;
+    }
     private static void PrintInfo(string file, long length, string message)
     {
         Console.Out.Write("* LEN: ");
@@ -224,34 +262,52 @@ class Program
         MatchType = MatchType.Simple
     };
     static readonly HashSet<string> visited = [];
-    static IEnumerable<FileInfo> EnumerateFiles(IEnumerable<FileSystemInfo> entries)
+    static IEnumerable<FileInfo> EnumerateFiles(IEnumerable<FileSystemInfo> entries, bool followSymLinks)
     {
         foreach (FileSystemInfo entry in entries)
         {
+            if (!followSymLinks && entry.LinkTarget is not null)
+                continue;
             switch (entry)
             {
                 case FileInfo fi when filterRegex?.IsMatch(fi.FullName) is not false:
-                    while (fi.LinkTarget is string link)
+                    try
                     {
-                        if (!visited.Add(fi.FullName))
-                            break;
-                        fi = new(Path.Combine(Path.GetDirectoryName(fi.FullName) ?? "", link));
+                        while (fi.LinkTarget is string link)
+                        {
+                            if (!visited.Add(fi.FullName))
+                                break;
+                            fi = new(Path.Combine(fi.DirectoryName ?? "", link));
+                        }
                     }
-                    if (!visited.Add(fi.FullName))
-                        continue;
-                    yield return fi;
+                    catch
+                    {
+                        // Skip broken symbolic link
+                        break;
+                    }
+                    if (visited.Add(fi.FullName))
+                        yield return fi;
                     break;
                 case DirectoryInfo di when skipRegex?.IsMatch(di.FullName) is not true:
-                    while (di.LinkTarget is string link)
+                    try
                     {
-                        if (!visited.Add(di.FullName))
-                            break;
-                        di = new(Path.Combine(Path.GetDirectoryName(di.FullName) ?? "", link));
+                        while (di.LinkTarget is string link)
+                        {
+                            if (!visited.Add(di.FullName))
+                                break;
+                            di = new(Path.Combine(di.Parent?.FullName ?? "", link));
+                        }
                     }
-                    if (!visited.Add(di.FullName))
-                        continue;
-                    foreach (FileInfo fi in EnumerateFiles(di.EnumerateFileSystemInfos("*", options)))
-                        yield return fi;
+                    catch
+                    {
+                        // Skip broken symbolic link
+                        break;
+                    }
+                    if (visited.Add(di.FullName))
+                    {
+                        foreach (FileInfo fi in EnumerateFiles(di.EnumerateFileSystemInfos("*", options), followSymLinks))
+                            yield return fi;
+                    }
                     break;
             }
         }

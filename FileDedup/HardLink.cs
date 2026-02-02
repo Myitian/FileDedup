@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 
 namespace FileDedup;
 
-public static partial class HardLink
+static partial class HardLink
 {
-    public static partial class Kernel32
+    static partial class Kernel32
     {
         [LibraryImport("kernel32", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -14,7 +14,7 @@ public static partial class HardLink
         public static bool CreateHardLink(string fileName, string existingFileName)
             => CreateHardLinkW(fileName, existingFileName, 0);
     }
-    public static partial class LibC
+    static partial class LibC
     {
         [LibraryImport("libc", EntryPoint = "link", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
         private static partial int Link(string oldpath, string newpath);

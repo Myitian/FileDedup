@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 namespace FileDedup;
 
 [InlineArray(8)]
-public struct FileHash : IEquatable<FileHash>
+struct FileHash : IEquatable<FileHash>
 {
     private int element0;
 
